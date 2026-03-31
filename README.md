@@ -1,4 +1,4 @@
-# openclaw-mcp
+# PearClaw 🍐
 
 **Give your OpenClaw agent real-time oversight of Claude Code.**
 
@@ -37,12 +37,12 @@ Your OpenClaw agent does. This bridge connects them.
 ### 1. Install the MCP server
 
 ```bash
-npm install -g openclaw-mcp
+npm install -g pearclaw
 ```
 
 Or run without installing:
 ```bash
-npx openclaw-mcp
+npx pearclaw
 ```
 
 ### 2. Add to Claude Code
@@ -54,7 +54,7 @@ Add to `~/.claude/settings.json`:
   "mcpServers": {
     "openclaw": {
       "command": "npx",
-      "args": ["openclaw-mcp"],
+      "args": ["pearclaw"],
       "env": {
         "OPENCLAW_GATEWAY_URL": "ws://127.0.0.1:18788"
       }
@@ -81,7 +81,7 @@ If your gateway uses token auth:
 Copy `claude/CLAUDE.md` to your project root. This tells Claude Code when and how to use the supervisor tools.
 
 ```bash
-cp node_modules/openclaw-mcp/claude/CLAUDE.md ./CLAUDE.md
+cp node_modules/pearclaw/claude/CLAUDE.md ./CLAUDE.md
 ```
 
 Or append it to an existing `CLAUDE.md`.
@@ -91,7 +91,7 @@ Or append it to an existing `CLAUDE.md`.
 Copy the supervisor skill to your OpenClaw workspace:
 
 ```bash
-cp -r node_modules/openclaw-mcp/skill ~/.openclaw/workspace/skills/mcp-supervisor
+cp -r node_modules/pearclaw/skill ~/.openclaw/workspace/skills/mcp-supervisor
 ```
 
 This tells your OpenClaw agent how to handle incoming review requests and write responses.
@@ -101,7 +101,7 @@ This tells your OpenClaw agent how to handle incoming review requests and write 
 For automatic escalation of high-risk actions without relying on Claude Code calling `consult_supervisor` itself:
 
 ```bash
-cp node_modules/openclaw-mcp/claude/hooks/openclaw-supervisor-hook.js ~/.claude/hooks/
+cp node_modules/pearclaw/claude/hooks/openclaw-supervisor-hook.js ~/.claude/hooks/
 ```
 
 Add to `~/.claude/hooks.json`:
@@ -125,7 +125,7 @@ Add to `~/.claude/hooks.json`:
 
 ## Configuration
 
-All config via environment variables or `~/.openclaw-mcp.json`.
+All config via environment variables or `~/.pearclaw.json`.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -136,7 +136,7 @@ All config via environment variables or `~/.openclaw-mcp.json`.
 | `OPENCLAW_MCP_TIMEOUT` | `25000` | Response timeout (ms) |
 | `OPENCLAW_MCP_FAIL_OPEN` | `true` | Approve when supervisor unreachable |
 
-### `~/.openclaw-mcp.json` (optional)
+### `~/.pearclaw.json` (optional)
 
 ```json
 {
@@ -206,6 +206,6 @@ details:  Optional structured data
 
 ## Built by
 
-[SideEye Labs](https://github.com/sideEyeLabs) — building vertical AI for the real world.
+[SideEye Labs](https://sideeyelabs.io) — building vertical AI for the real world.
 
 Part of the [OpenClaw](https://openclaw.ai) ecosystem.

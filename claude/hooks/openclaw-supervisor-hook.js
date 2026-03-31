@@ -94,7 +94,7 @@ function buildPayload(toolName, toolInput, riskLevel) {
 
 async function consultSupervisor(payload) {
   const requestId = randomUUID();
-  const responseFile = join(tmpdir(), `openclaw-mcp-res-${requestId}.json`);
+  const responseFile = join(tmpdir(), `pearclaw-res-${requestId}.json`);
 
   // Write a direct response-request file that the agent's heartbeat picks up
   const inboxDir =

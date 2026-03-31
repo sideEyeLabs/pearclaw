@@ -1,5 +1,5 @@
 /**
- * Config loader — reads from env vars and ~/.openclaw-mcp.json (if present).
+ * Config loader — reads from env vars and ~/.pearclaw.json (if present).
  *
  * Environment variables:
  *   OPENCLAW_GATEWAY_URL      WebSocket URL of your OpenClaw gateway (e.g. ws://localhost:18788)
@@ -16,7 +16,7 @@ import { homedir } from "os";
 
 export function loadConfig() {
   // File-based config (optional override)
-  const configFile = join(homedir(), ".openclaw-mcp.json");
+  const configFile = join(homedir(), ".pearclaw.json");
   let fileConfig = {};
   if (existsSync(configFile)) {
     try {

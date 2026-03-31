@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 /**
- * openclaw-mcp — MCP server that bridges Claude Code to your OpenClaw agent.
+ * pearclaw — MCP server that bridges Claude Code to your OpenClaw agent.
  *
  * Your OpenClaw agent gets real-time visibility into every Claude Code action,
  * can inject guidance mid-session, and can block tool calls before they run.
  *
  * Usage:
- *   npx openclaw-mcp
+ *   npx pearclaw
  *
  * Or add to ~/.claude/settings.json mcpServers block (see README).
  */
@@ -24,7 +24,7 @@ const config = loadConfig();
 const bridge = createGatewayBridge(config);
 
 const server = new Server(
-  { name: "openclaw-mcp", version: "0.1.0" },
+  { name: "pearclaw", version: "0.1.0" },
   { capabilities: { tools: {} } }
 );
 

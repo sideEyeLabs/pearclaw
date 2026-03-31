@@ -26,8 +26,8 @@ export function createGatewayBridge(config) {
 
 async function sendAndWait(type, payload, config) {
   const requestId = randomUUID();
-  const requestFile = join(tmpdir(), `openclaw-mcp-req-${requestId}.json`);
-  const responseFile = join(tmpdir(), `openclaw-mcp-res-${requestId}.json`);
+  const requestFile = join(tmpdir(), `pearclaw-req-${requestId}.json`);
+  const responseFile = join(tmpdir(), `pearclaw-res-${requestId}.json`);
 
   const envelope = {
     requestId,

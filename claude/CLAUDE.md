@@ -1,6 +1,6 @@
 # Supervisor Protocol
 
-You have an OpenClaw AI supervisor connected via MCP (`openclaw-mcp` server).
+You have an OpenClaw AI supervisor connected via MCP (`pearclaw` MCP server).
 
 ## When to consult
 

@@ -1,4 +1,4 @@
-# openclaw-mcp Supervisor Skill
+# PearClaw Supervisor Skill
 
 This skill enables your OpenClaw agent to act as a real-time supervisor for Claude Code sessions.
 
@@ -17,7 +17,7 @@ Action: Write (new): src/api/stripe-webhook.js
 Files: src/api/stripe-webhook.js
 Context: Adding Stripe webhook handler for subscription events
 
-Respond with JSON to `/tmp/openclaw-mcp-res-<uuid>.json`:
+Respond with JSON to `/tmp/pearclaw-res-<uuid>.json`:
 {"decision":"approve","reason":"..."} or {"decision":"block","reason":"...","suggestion":"..."}
 ```
 
@@ -61,7 +61,7 @@ Write a JSON file to the `responseFile` path in the request:
 To write your decision, use the `exec` tool:
 
 ```bash
-cat > /tmp/openclaw-mcp-res-<uuid>.json << 'EOF'
+cat > /tmp/pearclaw-res-<uuid>.json << 'EOF'
 {"decision":"approve","reason":"Good to go."}
 EOF
 ```

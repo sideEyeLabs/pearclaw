@@ -45,7 +45,7 @@ async function testServerStarts() {
   await new Promise((r) => setTimeout(r, 1000));
   server.kill();
 
-  if (stdout.includes('"name":"openclaw-mcp"')) {
+  if (stdout.includes('"name":"pearclaw"')) {
     pass("Server starts and responds to initialize");
   } else {
     fail(`Server did not respond correctly. stdout: ${stdout.slice(0, 200)}`);

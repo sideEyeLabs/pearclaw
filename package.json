@@ -1,10 +1,10 @@
 {
-  "name": "openclaw-mcp",
+  "name": "pearclaw",
   "version": "0.1.0",
-  "description": "Give your OpenClaw agent real-time oversight of Claude Code. Your AI stays in the loop, reviews every action, and has final say.",
+  "description": "AI pair programmer — gives your OpenClaw agent real-time oversight of Claude Code",
   "type": "module",
   "bin": {
-    "openclaw-mcp": "./src/server.js"
+    "pearclaw": "./src/server.js"
   },
   "scripts": {
     "start": "node src/server.js",
@@ -21,9 +21,9 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/sideEyeLabs/openclaw-mcp"
+    "url": "https://github.com/sideEyeLabs/pearclaw"
   },
-  "homepage": "https://github.com/sideEyeLabs/openclaw-mcp",
+  "homepage": "https://github.com/sideEyeLabs/pearclaw",
   "engines": {
     "node": ">=18"
   },
