@@ -1,0 +1,34 @@
+{
+  "name": "openclaw-mcp",
+  "version": "0.1.0",
+  "description": "Give your OpenClaw agent real-time oversight of Claude Code. Your AI stays in the loop, reviews every action, and has final say.",
+  "type": "module",
+  "bin": {
+    "openclaw-mcp": "./src/server.js"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node test/integration.js"
+  },
+  "keywords": [
+    "mcp",
+    "claude-code",
+    "openclaw",
+    "ai-supervisor",
+    "pair-programming"
+  ],
+  "author": "SideEye Labs",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sideEyeLabs/openclaw-mcp"
+  },
+  "homepage": "https://github.com/sideEyeLabs/openclaw-mcp",
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "ws": "^8.18.0"
+  }
+}
