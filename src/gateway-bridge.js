@@ -61,21 +61,24 @@ async function sendAndWait(type, payload, config) {
   return result;
 }
 
-// ─── Transport: openclaw gateway call ────────────────────────────────────────
+// ─── Transport: openclaw gateway call (cron.add one-shot) ─────────────────────
 async function deliverViaGatewayCall(envelope, config) {
   const message = formatAgentMessage(envelope);
+
+  // Inject via cron.add with deleteAfterRun — fires in ~3s, self-cleans
+  const runAt = new Date(Date.now() + 3000).toISOString();
   const params = JSON.stringify({
-    kind: "systemEvent",
+    name: `pearclaw-req-${envelope.requestId.slice(0, 8)}`,
     sessionTarget: config.sessionTarget || "main",
     payload: {
-      kind: "mcpSupervisorRequest",
-      message,
-      requestId: envelope.requestId,
-      responseFile: envelope.responseFile,
+      kind: "systemEvent",
+      text: message,
     },
+    schedule: { kind: "at", at: runAt },
+    deleteAfterRun: true,
   });
 
-  const args = ["gateway", "call", "system-presence", "--params", params];
+  const args = ["gateway", "call", "cron.add", "--json", "--params", params];
   if (config.gatewayToken) {
     args.push("--token", config.gatewayToken);
   }
@@ -83,10 +86,14 @@ async function deliverViaGatewayCall(envelope, config) {
     args.push("--url", config.gatewayUrl);
   }
 
-  spawnSync("openclaw", args, {
+  const result = spawnSync("openclaw", args, {
     stdio: "pipe",
-    timeout: 5000,
+    timeout: 8000,
   });
+
+  if (result.status !== 0) {
+    throw new Error(`Gateway delivery failed: ${result.stderr?.toString()}`);
+  }
 }
 
 // ─── Transport: drop file (agent polls OPENCLAW_MCP_INBOX_DIR) ───────────────
