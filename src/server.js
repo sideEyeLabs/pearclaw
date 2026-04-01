@@ -182,3 +182,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 // ─── Start ────────────────────────────────────────────────────────────────────
 const transport = new StdioServerTransport();
 await server.connect(transport);
+
+process.stderr.write(
+  "\n🍐 PearClaw connected — Hedy is watching this session.\n\n"
+);
