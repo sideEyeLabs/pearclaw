@@ -17,11 +17,32 @@ import { randomUUID } from "crypto";
 
 const POLL_INTERVAL_MS = 250;
 
+// Push inbox — Hedy writes here, CC polls it
+const PUSH_INBOX = join(tmpdir(), "pearclaw-push.json");
+
 export function createGatewayBridge(config) {
   return {
     consult: (payload) => sendAndWait("consult", payload, config),
     notify: (payload) => sendAndWait("notify", payload, config),
+    poll: (_payload) => readPushInbox(),
   };
+}
+
+// ─── Push inbox: Hedy writes, CC reads ───────────────────────────────────────
+function readPushInbox() {
+  if (!existsSync(PUSH_INBOX)) {
+    return { message: null };
+  }
+  try {
+    const raw = readFileSync(PUSH_INBOX, "utf8").trim();
+    if (!raw) return { message: null };
+    const data = JSON.parse(raw);
+    // Consume it — one-shot delivery
+    unlinkSync(PUSH_INBOX);
+    return { message: data.message || null };
+  } catch {
+    return { message: null };
+  }
 }
 
 async function sendAndWait(type, payload, config) {

@@ -67,6 +67,23 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
+      name: "get_supervisor_message",
+      description:
+        "Poll for proactive messages from your OpenClaw supervisor. " +
+        "Call this every ~5 tool calls. Hedy may have injected context, corrections, or guidance. " +
+        "Returns: { message: string|null } — if message is non-null, read it before continuing.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          context: {
+            type: "string",
+            description: "Brief description of what you just did / are about to do.",
+          },
+        },
+        required: [],
+      },
+    },
+    {
       name: "notify_supervisor",
       description:
         "Send a one-way update to your OpenClaw supervisor. " +
@@ -125,6 +142,19 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       };
       return {
         content: [{ type: "text", text: JSON.stringify(fallback, null, 2) }],
+      };
+    }
+  }
+
+  if (name === "get_supervisor_message") {
+    try {
+      const result = await bridge.poll({ context: args.context || "" });
+      return {
+        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+      };
+    } catch (err) {
+      return {
+        content: [{ type: "text", text: '{"message": null}' }],
       };
     }
   }
