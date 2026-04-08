@@ -19,6 +19,7 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import { createGatewayBridge } from "./gateway-bridge.js";
 import { loadConfig } from "./config.js";
+import { getContext } from "./context-injector.js";
 
 const config = loadConfig();
 const bridge = createGatewayBridge(config);
@@ -78,6 +79,23 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           context: {
             type: "string",
             description: "Brief description of what you just did / are about to do.",
+          },
+        },
+        required: [],
+      },
+    },
+    {
+      name: "get_session_context",
+      description:
+        "Get Hedy context for this coding session. Call this at the start of every session. " +
+        "Returns project state, active priorities, and recent decisions so you can work in " +
+        "context without starting cold.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          project: {
+            type: "string",
+            description: "Optional project name hint (e.g. 'wegodive', 'clipcurate').",
           },
         },
         required: [],
@@ -155,6 +173,24 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     } catch (err) {
       return {
         content: [{ type: "text", text: '{"message": null}' }],
+      };
+    }
+  }
+
+  if (name === "get_session_context") {
+    try {
+      const context = getContext(args.project || "");
+      return {
+        content: [{ type: "text", text: context }],
+      };
+    } catch (err) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: "(PearClaw: could not load Hedy context — workspace may be unavailable. Proceeding without context.)",
+          },
+        ],
       };
     }
   }

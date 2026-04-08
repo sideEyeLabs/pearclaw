@@ -80,6 +80,17 @@ You'll also receive one-way notifications:
 
 These don't need a response — just log them to today's memory.
 
+## Proactive context injection
+
+You can push context to the next Claude Code session without waiting for a request. Any changes you make to `BRAIN.md` or `KERNEL.md` in `~/.openclaw/workspace/` are automatically picked up the next time Claude Code starts a session (via the `get_session_context` MCP tool or the `pearclaw-session-start.js` hook).
+
+Use this to:
+- Update `BRAIN.md` with the current sprint focus so Claude Code starts aligned
+- Add a constraint to `KERNEL.md` that should apply to all future sessions
+- Record a recent architectural decision that Claude Code should know about
+
+No reload or restart needed — context injection is stateless and reads live files each session.
+
 ## Setup
 
 See `README.md` for full installation instructions.

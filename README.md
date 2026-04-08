@@ -169,6 +169,42 @@ When Claude Code calls `consult_supervisor`, your OpenClaw agent receives a stru
 
 See `skill/SKILL.md` for the full supervisor protocol.
 
+### Session context injection
+
+At the start of every session, Claude Code calls `get_session_context` to load Hedy's live operational state:
+
+```
+get_session_context({ project?: "wegodive" })
+```
+
+This reads three files from `~/.openclaw/workspace/` and returns a compact summary (capped at ~2500 chars):
+
+| File | Lines read | Purpose |
+|------|-----------|--------|
+| `KERNEL.md` | First 60 | Identity, rules, red lines |
+| `BRAIN.md` | First 50 | Current sprint, active blockers |
+| `memory/YYYY-MM-DD.md` | Last 30 | What happened today |
+
+Context is also written to `~/.pearclaw/session-context.md` for debugging.
+
+**SessionStart hook** (`claude/hooks/pearclaw-session-start.js`) fires automatically before the first message when installed, injecting context without needing an explicit tool call:
+
+```json
+{
+  "hooks": {
+    "SessionStart": [{
+      "hooks": [{
+        "type": "command",
+        "command": "node ~/.claude/hooks/pearclaw-session-start.js",
+        "timeout": 8000
+      }]
+    }]
+  }
+}
+```
+
+Hedy can push context proactively by updating `BRAIN.md` or `KERNEL.md` — changes are picked up on the next session start automatically.
+
 ---
 
 ## Tools exposed to Claude Code
