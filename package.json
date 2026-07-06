@@ -1,7 +1,7 @@
 {
   "name": "pearclaw",
   "version": "0.1.0",
-  "description": "AI pair programmer — gives your OpenClaw agent real-time oversight of Claude Code",
+  "description": "AI pair programmer — gives your OpenClaw agent real-time oversight of Claude Code or Codex CLI",
   "type": "module",
   "bin": {
     "pearclaw": "./src/server.js"
@@ -13,6 +13,8 @@
   "keywords": [
     "mcp",
     "claude-code",
+    "codex",
+    "codex-cli",
     "openclaw",
     "ai-supervisor",
     "pair-programming"

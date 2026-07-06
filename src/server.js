@@ -1,14 +1,15 @@
 #!/usr/bin/env node
 /**
- * pearclaw — MCP server that bridges Claude Code to your OpenClaw agent.
+ * pearclaw — MCP server that bridges Claude Code or Codex CLI to your OpenClaw agent.
  *
- * Your OpenClaw agent gets real-time visibility into every Claude Code action,
+ * Your OpenClaw agent gets real-time visibility into every coding-agent action,
  * can inject guidance mid-session, and can block tool calls before they run.
  *
  * Usage:
  *   npx pearclaw
  *
- * Or add to ~/.claude/settings.json mcpServers block (see README).
+ * Or add to ~/.claude/settings.json (Claude Code) or ~/.codex/config.toml
+ * (Codex CLI) mcpServers/mcp_servers block (see README).
  */
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -30,7 +31,8 @@ const server = new Server(
 );
 
 // ─── Tool: consult_supervisor ────────────────────────────────────────────────
-// Called by Claude Code before significant actions. Returns approve/block/modify.
+// Called by the coding agent (Claude Code or Codex CLI) before significant
+// actions. Returns approve/block/modify.
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: [
     {

@@ -1,19 +1,19 @@
 # PearClaw 🍐
 
-**Give your OpenClaw agent real-time oversight of Claude Code.**
+**Give your OpenClaw agent real-time oversight of Claude Code or Codex CLI.**
 
-Your AI stays in the loop on every significant action, reviews decisions in context, and can block or redirect before code is written. Pair programming where one of the pair actually knows your codebase.
+Your AI stays in the loop on every significant action, reviews decisions in context, and can block or redirect before code is written. Pair programming where one of the pair actually knows your codebase. Works the same way whether the pair-programmer is Claude Code or Codex CLI — both speak MCP and get the same supervisor.
 
 ```
-You type a task into Claude Code
+You type a task into Claude Code or Codex CLI
          ↓
-Claude Code plans an action (write file, run command, etc.)
+The coding agent plans an action (write file, run command, etc.)
          ↓
 consult_supervisor() — asks your OpenClaw agent
          ↓
 OpenClaw reviews in context, responds: approve / block / modify
          ↓
-Claude Code proceeds (or stops)
+The coding agent proceeds (or stops)
          ↓
 notify_supervisor() — agent gets a completion summary
 ```
@@ -22,7 +22,7 @@ notify_supervisor() — agent gets a completion summary
 
 ## Why
 
-Claude Code is powerful but operates in isolation. It doesn't know:
+Claude Code and Codex CLI are powerful but operate in isolation. They don't know:
 - Your codebase conventions that aren't written down
 - That you already have a utility for that in `lib/`
 - That this migration will break production
@@ -45,9 +45,9 @@ Or run without installing:
 npx pearclaw
 ```
 
-### 2. Add to Claude Code
+### 2. Add the MCP server to your coding agent
 
-Add to `~/.claude/settings.json`:
+**Claude Code** — add to `~/.claude/settings.json`:
 
 ```json
 {
@@ -63,28 +63,39 @@ Add to `~/.claude/settings.json`:
 }
 ```
 
+**Codex CLI** — add to `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.pearclaw]
+command = "npx"
+args = ["pearclaw"]
+env = { OPENCLAW_GATEWAY_URL = "ws://127.0.0.1:18788" }
+```
+
 Replace the gateway URL with your OpenClaw gateway address. Find it with:
 ```bash
 openclaw gateway status
 ```
 
-If your gateway uses token auth:
-```json
-"env": {
-  "OPENCLAW_GATEWAY_URL": "ws://127.0.0.1:18788",
-  "OPENCLAW_GATEWAY_TOKEN": "your-token-here"
-}
-```
+If your gateway uses token auth, add `OPENCLAW_GATEWAY_TOKEN` to the same `env` block.
 
-### 3. Add the CLAUDE.md protocol
+### 3. Add the supervisor protocol doc
 
-Copy `claude/CLAUDE.md` to your project root. This tells Claude Code when and how to use the supervisor tools.
+**Claude Code** — copy `claude/CLAUDE.md` to your project root. This tells Claude Code when and how to use the supervisor tools.
 
 ```bash
 cp node_modules/pearclaw/claude/CLAUDE.md ./CLAUDE.md
 ```
 
 Or append it to an existing `CLAUDE.md`.
+
+**Codex CLI** — copy `codex/AGENTS.md` to your project root (Codex reads `AGENTS.md` the way Claude Code reads `CLAUDE.md`):
+
+```bash
+cp node_modules/pearclaw/codex/AGENTS.md ./AGENTS.md
+```
+
+Or append it to an existing `AGENTS.md`. The protocol text is identical between the two files — only the filename convention differs.
 
 ### 4. Install the OpenClaw skill
 
@@ -94,17 +105,17 @@ Copy the supervisor skill to your OpenClaw workspace:
 cp -r node_modules/pearclaw/skill ~/.openclaw/workspace/skills/mcp-supervisor
 ```
 
-This tells your OpenClaw agent how to handle incoming review requests and write responses.
+This tells your OpenClaw agent how to handle incoming review requests and write responses. Same skill regardless of which coding agent is asking.
 
 ### 5. (Optional) Install the PreToolUse hook
 
-For automatic escalation of high-risk actions without relying on Claude Code calling `consult_supervisor` itself:
+For automatic escalation of high-risk actions without relying on the coding agent calling `consult_supervisor` itself. The same script (`hooks/pearclaw-supervisor-hook.js`) installs into either harness — its I/O contract (JSON on stdin, exit code 2 + `{"decision":"block","reason":...}` to block) is compatible across both.
+
+**Claude Code** — copy to `~/.claude/hooks/` and add to `~/.claude/hooks.json`:
 
 ```bash
-cp node_modules/pearclaw/claude/hooks/openclaw-supervisor-hook.js ~/.claude/hooks/
+cp node_modules/pearclaw/hooks/pearclaw-supervisor-hook.js ~/.claude/hooks/
 ```
-
-Add to `~/.claude/hooks.json`:
 
 ```json
 {
@@ -113,13 +124,38 @@ Add to `~/.claude/hooks.json`:
       "matcher": { "tool_name": "Write|Edit|MultiEdit|Bash" },
       "hooks": [{
         "type": "command",
-        "command": "node ~/.claude/hooks/openclaw-supervisor-hook.js",
+        "command": "node ~/.claude/hooks/pearclaw-supervisor-hook.js",
         "timeout": 28000
       }]
     }]
   }
 }
 ```
+
+**Codex CLI** — copy to `~/.codex/hooks/` and add to `~/.codex/hooks.json`:
+
+```bash
+cp node_modules/pearclaw/hooks/pearclaw-supervisor-hook.js ~/.codex/hooks/
+```
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [{
+      "matcher": "Bash|apply_patch",
+      "hooks": [{
+        "type": "command",
+        "command": "node ~/.codex/hooks/pearclaw-supervisor-hook.js",
+        "timeout": 28
+      }]
+    }]
+  }
+}
+```
+
+(Codex hook `timeout` is in seconds, not ms.) Codex will prompt you to trust the hook the first time it fires — see `codex hooks` docs / `/hooks` in the Codex CLI.
+
+Note: Codex's own docs describe `PreToolUse` as "a guardrail rather than a complete enforcement boundary" — it doesn't intercept every shell path yet (e.g. `unified_exec`). Treat it as defense in depth, not a hard boundary, on either platform.
 
 ---
 
@@ -150,7 +186,7 @@ All config via environment variables or `~/.pearclaw.json`.
 
 ## How the supervisor responds
 
-When Claude Code calls `consult_supervisor`, your OpenClaw agent receives a structured message and writes a JSON response to a temp file.
+When the coding agent calls `consult_supervisor`, your OpenClaw agent receives a structured message and writes a JSON response to a temp file.
 
 **Approve:**
 ```json
@@ -171,7 +207,7 @@ See `skill/SKILL.md` for the full supervisor protocol.
 
 ### Session context injection
 
-At the start of every session, Claude Code calls `get_session_context` to load Hedy's live operational state:
+At the start of every session, the coding agent calls `get_session_context` to load Hedy's live operational state:
 
 ```
 get_session_context({ project?: "wegodive" })
@@ -187,8 +223,9 @@ This reads three files from `~/.openclaw/workspace/` and returns a compact summa
 
 Context is also written to `~/.pearclaw/session-context.md` for debugging.
 
-**SessionStart hook** (`claude/hooks/pearclaw-session-start.js`) fires automatically before the first message when installed, injecting context without needing an explicit tool call:
+**SessionStart hook** (`hooks/pearclaw-session-start.js`) fires automatically before the first message when installed, injecting context without needing an explicit tool call. Same script for both harnesses:
 
+**Claude Code** (`~/.claude/hooks.json`):
 ```json
 {
   "hooks": {
@@ -203,15 +240,31 @@ Context is also written to `~/.pearclaw/session-context.md` for debugging.
 }
 ```
 
+**Codex CLI** (`~/.codex/hooks.json`):
+```json
+{
+  "hooks": {
+    "SessionStart": [{
+      "matcher": "startup|resume",
+      "hooks": [{
+        "type": "command",
+        "command": "node ~/.codex/hooks/pearclaw-session-start.js",
+        "timeout": 8
+      }]
+    }]
+  }
+}
+```
+
 Hedy can push context proactively by updating `BRAIN.md` or `KERNEL.md` — changes are picked up on the next session start automatically.
 
 ---
 
-## Tools exposed to Claude Code
+## Tools exposed to the coding agent
 
 ### `consult_supervisor`
 
-Synchronous review. Claude Code blocks until your agent responds (or timeout).
+Synchronous review. The coding agent blocks until your agent responds (or timeout).
 
 ```
 action:         What you're about to do
@@ -237,6 +290,7 @@ details:  Optional structured data
 - Response timeout: 25 seconds. If your agent doesn't respond in time, the action is approved (fail-open by default).
 - Requires OpenClaw gateway running locally (or accessible via network).
 - The supervisor can only block/modify — it can't rewrite code directly (yet).
+- Codex's `PreToolUse` hook is best-effort (see install step 5) — it doesn't cover every tool path yet.
 
 ---
 
