@@ -53,3 +53,11 @@ This returns Hedy's live operational state — current priorities, recent decisi
 **If it returns an error or empty:** Proceed normally. Missing context is non-fatal.
 
 The `SessionStart` hook (`pearclaw-session-start.js`) also fires automatically when installed — it injects context before your first message. The explicit `get_session_context` call is a belt-and-suspenders fallback for when the hook isn't active.
+
+---
+
+## Codex-specific notes
+
+This file is Codex's equivalent of `claude/CLAUDE.md` — same protocol, since the underlying `pearclaw` MCP server and tool contracts (`consult_supervisor`, `get_supervisor_message`, `get_session_context`, `notify_supervisor`) are identical across harnesses. Only the install location and hook plumbing differ (`~/.codex/config.toml`, `~/.codex/hooks.json` — see the repo `README.md`).
+
+One real difference: Codex's own docs describe its `PreToolUse` hook as "a guardrail rather than a complete enforcement boundary" — it doesn't yet intercept every shell/tool path the way this protocol assumes for automatic escalation. Treat the hook as best-effort defense in depth, not a substitute for actually calling `consult_supervisor` yourself per the rules above.
