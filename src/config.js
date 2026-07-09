@@ -4,7 +4,11 @@
  * Environment variables:
  *   OPENCLAW_GATEWAY_URL      WebSocket URL of your OpenClaw gateway (e.g. ws://localhost:18788)
  *   OPENCLAW_GATEWAY_TOKEN    Auth token (if gateway.auth = "token")
- *   OPENCLAW_MCP_SESSION      Agent session to target (default: "main")
+ *   OPENCLAW_MCP_SESSION      Agent session to target (default: "main"; any
+ *                             other value is passed to the gateway as an
+ *                             explicit wake sessionKey)
+ *   OPENCLAW_MCP_TRANSPORT    "gateway-call" (openclaw gateway call wake) or
+ *                             "file" (drop-file inbox). Default: gateway-call
  *   OPENCLAW_MCP_INBOX_DIR    Drop-file inbox dir (fallback if no gateway URL)
  *   OPENCLAW_MCP_TIMEOUT      Response timeout in ms (default: 25000)
  *   OPENCLAW_MCP_FAIL_OPEN    If "true", approve when supervisor unreachable (default: true)

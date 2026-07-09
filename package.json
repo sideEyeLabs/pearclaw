@@ -6,6 +6,12 @@
   "bin": {
     "pearclaw": "./src/server.js"
   },
+  "exports": {
+    ".": "./src/server.js",
+    "./gateway-bridge": "./src/gateway-bridge.js",
+    "./config": "./src/config.js",
+    "./context-injector": "./src/context-injector.js"
+  },
   "scripts": {
     "start": "node src/server.js",
     "test": "node test/integration.js"

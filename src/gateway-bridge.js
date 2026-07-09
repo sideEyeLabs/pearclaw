@@ -1,23 +1,52 @@
 /**
- * Gateway Bridge — sends requests to OpenClaw gateway and waits for agent response.
+ * Gateway Bridge — the single transport implementation for delivering
+ * PearClaw requests into the OpenClaw agent's session and waiting for a
+ * structured response. Both the MCP server (src/server.js) and the
+ * PreToolUse hook (hooks/pearclaw-supervisor-hook.js) use this module —
+ * do not reimplement delivery/polling elsewhere.
  *
- * OpenClaw gateway uses WebSocket RPC. We POST a systemEvent which triggers
- * the agent's session, then poll the response file.
+ * Delivery transports:
+ *   "gateway-call" — `openclaw gateway call wake` (default when a gateway
+ *                    URL is configured). The `wake` RPC is OpenClaw's
+ *                    immediate wake-text-injection primitive:
+ *                    params { mode: "now"|"next-heartbeat", text,
+ *                             sessionKey?, agentId? }
+ *                    (verified against openclaw docs/gateway/protocol.md
+ *                    and the gateway's WakeParamsSchema / cron wake handler).
+ *                    Consults use mode "now" (immediate heartbeat);
+ *                    notifies use mode "next-heartbeat" (non-interruptive).
+ *   "file"         — drop the request envelope into OPENCLAW_MCP_INBOX_DIR
+ *                    for the agent to poll (no gateway needed).
  *
- * Two transport modes:
- *   "webhook"  — HTTP POST to gateway /hooks endpoint (recommended, fast)
- *   "file"     — write to a temp file, agent polls it (fallback, no gateway needed)
+ * Response channel (both transports): the agent writes JSON to the
+ * `responseFile` path included in the request; we poll for it. This
+ * requires the MCP server/hook and the agent to share a filesystem, so
+ * both transports are effectively same-host today. Remote-gateway support
+ * would need a network response channel (e.g. the OpenClaw Webhooks
+ * plugin) — tracked in docs/CHALLENGES.md, not implemented.
+ *
+ * Every consult round-trip is appended to ~/.pearclaw/audit.jsonl
+ * (request + decision), since response files are deleted after reading.
  */
 
-import { execSync, spawnSync } from "child_process";
-import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync } from "fs";
-import { tmpdir } from "os";
+import { spawnSync } from "child_process";
+import {
+  existsSync,
+  readFileSync,
+  writeFileSync,
+  unlinkSync,
+  mkdirSync,
+  appendFileSync,
+} from "fs";
+import { tmpdir, homedir } from "os";
 import { join } from "path";
 import { randomUUID } from "crypto";
 
 const POLL_INTERVAL_MS = 250;
+const VALID_DECISIONS = ["approve", "block", "modify"];
+const AUDIT_LOG = join(homedir(), ".pearclaw", "audit.jsonl");
 
-// Push inbox — Hedy writes here, CC polls it
+// Push inbox — Hedy writes here, the coding agent polls it
 const PUSH_INBOX = join(tmpdir(), "pearclaw-push.json");
 
 export function createGatewayBridge(config) {
@@ -28,7 +57,7 @@ export function createGatewayBridge(config) {
   };
 }
 
-// ─── Push inbox: Hedy writes, CC reads ───────────────────────────────────────
+// ─── Push inbox: Hedy writes, coding agent reads ─────────────────────────────
 function readPushInbox() {
   if (!existsSync(PUSH_INBOX)) {
     return { message: null };
@@ -47,7 +76,6 @@ function readPushInbox() {
 
 async function sendAndWait(type, payload, config) {
   const requestId = randomUUID();
-  const requestFile = join(tmpdir(), `pearclaw-req-${requestId}.json`);
   const responseFile = join(tmpdir(), `pearclaw-res-${requestId}.json`);
 
   const envelope = {
@@ -58,48 +86,41 @@ async function sendAndWait(type, payload, config) {
     ts: Date.now(),
   };
 
-  // Write request to temp file
-  writeFileSync(requestFile, JSON.stringify(envelope, null, 2));
-
   // Deliver via configured transport
   if (config.transport === "gateway-call") {
-    await deliverViaGatewayCall(envelope, config);
+    deliverViaGatewayCall(envelope, config);
   } else {
-    await deliverViaDropFile(envelope, requestFile, config);
+    deliverViaDropFile(envelope, config);
   }
 
   if (type === "notify") {
     // Fire-and-forget — don't wait
+    audit({ ...envelope, decision: null });
     return { ok: true };
   }
 
-  // Poll for response
+  // Poll for the agent's structured response
   const result = await pollForResponse(responseFile, config.timeoutMs || 25000);
-
-  // Cleanup
-  try { unlinkSync(requestFile); } catch {}
-
+  audit({ ...envelope, decision: result });
   return result;
 }
 
-// ─── Transport: openclaw gateway call (cron.add one-shot) ─────────────────────
-async function deliverViaGatewayCall(envelope, config) {
+// ─── Transport: openclaw gateway call wake ───────────────────────────────────
+function deliverViaGatewayCall(envelope, config) {
   const message = formatAgentMessage(envelope);
 
-  // Inject via cron.add with deleteAfterRun — fires in ~3s, self-cleans
-  const runAt = new Date(Date.now() + 3000).toISOString();
-  const params = JSON.stringify({
-    name: `pearclaw-req-${envelope.requestId.slice(0, 8)}`,
-    sessionTarget: config.sessionTarget || "main",
-    payload: {
-      kind: "systemEvent",
-      text: message,
-    },
-    schedule: { kind: "at", at: runAt },
-    deleteAfterRun: true,
-  });
+  const wakeParams = {
+    // Consults need an immediate heartbeat; notifies can ride the next one.
+    mode: envelope.type === "consult" ? "now" : "next-heartbeat",
+    text: message,
+  };
+  // Omitting sessionKey targets the main session (gateway default).
+  // A non-"main" sessionTarget is passed through as an explicit session key.
+  if (config.sessionTarget && config.sessionTarget !== "main") {
+    wakeParams.sessionKey = config.sessionTarget;
+  }
 
-  const args = ["gateway", "call", "cron.add", "--json", "--params", params];
+  const args = ["gateway", "call", "wake", "--json", "--params", JSON.stringify(wakeParams)];
   if (config.gatewayToken) {
     args.push("--token", config.gatewayToken);
   }
@@ -112,13 +133,15 @@ async function deliverViaGatewayCall(envelope, config) {
     timeout: 8000,
   });
 
-  if (result.status !== 0) {
-    throw new Error(`Gateway delivery failed: ${result.stderr?.toString()}`);
+  if (result.error || result.status !== 0) {
+    throw new Error(
+      `Gateway delivery failed: ${result.error?.message || result.stderr?.toString() || `exit ${result.status}`}`
+    );
   }
 }
 
 // ─── Transport: drop file (agent polls OPENCLAW_MCP_INBOX_DIR) ───────────────
-async function deliverViaDropFile(envelope, requestFile, config) {
+function deliverViaDropFile(envelope, config) {
   const inboxDir = config.inboxDir;
   if (!inboxDir) {
     throw new Error(
@@ -142,9 +165,10 @@ function pollForResponse(responseFile, timeoutMs) {
           const raw = readFileSync(responseFile, "utf8");
           const data = JSON.parse(raw);
           try { unlinkSync(responseFile); } catch {}
-          resolve(data);
+          resolve(validateResponse(data));
         } catch (e) {
-          reject(new Error(`Invalid response JSON: ${e.message}`));
+          try { unlinkSync(responseFile); } catch {}
+          reject(new Error(`Invalid supervisor response: ${e.message}`));
         }
         return;
       }
@@ -161,13 +185,44 @@ function pollForResponse(responseFile, timeoutMs) {
   });
 }
 
+// ─── Response schema validation ───────────────────────────────────────────────
+// The supervisor writes the response file by hand (LLM + shell), so treat it
+// as untrusted input: require a known decision and string fields.
+function validateResponse(data) {
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
+    throw new Error("response is not a JSON object");
+  }
+  if (!VALID_DECISIONS.includes(data.decision)) {
+    throw new Error(
+      `decision must be one of ${VALID_DECISIONS.join("/")} (got ${JSON.stringify(data.decision)})`
+    );
+  }
+  return {
+    decision: data.decision,
+    reason: typeof data.reason === "string" ? data.reason : "",
+    ...(typeof data.suggestion === "string" ? { suggestion: data.suggestion } : {}),
+  };
+}
+
+// ─── Audit trail ──────────────────────────────────────────────────────────────
+// Response files are deleted after reading; keep an append-only record so
+// consults/decisions are reviewable after the fact. Best-effort — never throws.
+function audit(entry) {
+  try {
+    mkdirSync(join(homedir(), ".pearclaw"), { recursive: true });
+    appendFileSync(AUDIT_LOG, JSON.stringify(entry) + "\n");
+  } catch {
+    // non-fatal
+  }
+}
+
 // ─── Format the message that lands in the agent's session ────────────────────
 function formatAgentMessage(envelope) {
   const { type, payload } = envelope;
 
   if (type === "notify") {
     return (
-      `🤖 Claude Code update [${payload.event}]: ${payload.summary}` +
+      `🤖 Coding agent update [${payload.event}]: ${payload.summary}` +
       (payload.details && Object.keys(payload.details).length
         ? `\n\`\`\`json\n${JSON.stringify(payload.details, null, 2)}\n\`\`\``
         : "")
@@ -182,7 +237,7 @@ function formatAgentMessage(envelope) {
       : "";
 
   return (
-    `${riskEmoji} **Claude Code review request** (${payload.risk_level} risk)\n\n` +
+    `${riskEmoji} **Coding agent review request** (${payload.risk_level} risk)\n\n` +
     `**Action:** ${payload.action}${filesLine}\n` +
     `**Context:** ${payload.context}\n\n` +
     `Respond with JSON to \`${envelope.responseFile}\`:\n` +

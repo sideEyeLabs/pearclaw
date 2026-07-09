@@ -4,21 +4,25 @@
  *
  * Fires before Write/Edit/Bash (Claude Code) or apply_patch/Bash (Codex CLI)
  * tool calls and consults your OpenClaw agent for any high-risk action.
- * Lower-risk actions pass through. Same script installs into either harness —
- * the hook I/O contract for PreToolUse is compatible enough (JSON on stdin,
- * exit code 2 + `{"decision":"block","reason":...}` to block) that no fork
- * is needed.
+ * Lower-risk actions pass through. Same script installs into either harness.
  *
- * Install for Claude Code: copy to ~/.claude/hooks/ and add to ~/.claude/hooks.json:
+ * Transport: this hook imports the shared gateway bridge from the pearclaw
+ * package (src/gateway-bridge.js) — it does not implement its own delivery.
+ * If the package can't be resolved, the hook fails open (exit 0).
+ *
+ * Install for Claude Code: copy to ~/.claude/hooks/ and add to the "hooks"
+ * key of ~/.claude/settings.json (or .claude/settings.json per project).
+ * Claude Code reads hooks from settings files only — there is no separate
+ * ~/.claude/hooks.json. Matchers are strings and timeout is in SECONDS:
  *
  *   {
  *     "hooks": {
  *       "PreToolUse": [{
- *         "matcher": { "tool_name": "Write|Edit|MultiEdit|Bash" },
+ *         "matcher": "Write|Edit|MultiEdit|Bash",
  *         "hooks": [{
  *           "type": "command",
  *           "command": "node ~/.claude/hooks/pearclaw-supervisor-hook.js",
- *           "timeout": 28000
+ *           "timeout": 30
  *         }]
  *       }]
  *     }
@@ -33,28 +37,23 @@
  *         "hooks": [{
  *           "type": "command",
  *           "command": "node ~/.codex/hooks/pearclaw-supervisor-hook.js",
- *           "timeout": 28
+ *           "timeout": 30
  *         }]
  *       }]
  *     }
  *   }
  *
+ * Block contract: on a supervisor "block" the hook exits 2 with the reason on
+ * stderr (Claude Code ignores stdout on exit 2 and feeds stderr to the model)
+ * and also prints `{"decision":"block",...}` JSON to stdout for Codex.
+ *
  * Note: Codex's docs describe PreToolUse as "a guardrail rather than a
  * complete enforcement boundary" — it doesn't yet intercept every shell path
  * (e.g. unified_exec) the way Claude Code's hook does. Treat it as
  * best-effort on Codex, not a hard boundary.
- *
- * The hook uses the MCP server's temp-file protocol directly (no separate process needed).
  */
 
-import { readFileSync, writeFileSync, existsSync, unlinkSync } from "fs";
-import { randomUUID } from "crypto";
-import { join } from "path";
-import { tmpdir } from "os";
-import { execSync } from "child_process";
-
-const TIMEOUT_MS = 25000;
-const POLL_MS = 200;
+import { existsSync } from "fs";
 
 // High-risk patterns that always trigger supervisor review
 const HIGH_RISK_PATTERNS = [
@@ -138,69 +137,53 @@ function buildPayload(toolName, toolInput, riskLevel) {
   };
 }
 
-async function consultSupervisor(payload) {
-  const requestId = randomUUID();
-  const responseFile = join(tmpdir(), `pearclaw-res-${requestId}.json`);
+/**
+ * Resolve the shared bridge + config from the pearclaw package.
+ * Resolution order:
+ *   1. Sibling path (hook lives inside the repo: hooks/ → ../src/)
+ *   2. Package resolution (hook copied to ~/.claude/hooks/ with pearclaw
+ *      installed — uses the package export map)
+ */
+async function loadBridge() {
+  const candidatePairs = [
+    [
+      new URL("../src/gateway-bridge.js", import.meta.url).href,
+      new URL("../src/config.js", import.meta.url).href,
+    ],
+    ["pearclaw/gateway-bridge", "pearclaw/config"],
+  ];
 
-  // Write a direct response-request file that the agent's heartbeat picks up
-  const inboxDir =
-    process.env.OPENCLAW_MCP_INBOX_DIR ||
-    join(process.env.HOME || "~", ".openclaw", "mcp-inbox");
-
-  const envelope = {
-    requestId,
-    type: "consult",
-    payload,
-    responseFile,
-    ts: Date.now(),
-  };
-
-  // Try gateway-call first (fast path)
-  try {
-    const params = JSON.stringify({
-      kind: "systemEvent",
-      sessionTarget: "main",
-      payload: {
-        kind: "mcpSupervisorRequest",
-        ...payload,
-        requestId,
-        responseFile,
-      },
-    });
-
-    execSync(`openclaw gateway call system-presence --params '${params.replace(/'/g, "'\\''")}'`, {
-      timeout: 3000,
-      stdio: "pipe",
-    });
-  } catch {
-    // Gateway call failed — write to inbox dir as fallback
+  for (const [bridgePath, configPath] of candidatePairs) {
     try {
-      execSync(`mkdir -p "${inboxDir}"`);
-      writeFileSync(
-        join(inboxDir, `req-${requestId}.json`),
-        JSON.stringify(envelope, null, 2)
-      );
+      const [bridgeMod, configMod] = await Promise.all([
+        import(bridgePath),
+        import(configPath),
+      ]);
+      if (
+        typeof bridgeMod.createGatewayBridge === "function" &&
+        typeof configMod.loadConfig === "function"
+      ) {
+        return bridgeMod.createGatewayBridge(configMod.loadConfig());
+      }
     } catch {
-      // Both transports failed — fail open
-      return { decision: "approve", reason: "Supervisor unreachable — failing open." };
+      // try next candidate
     }
   }
+  return null;
+}
 
-  // Poll for response
-  const deadline = Date.now() + TIMEOUT_MS;
-  while (Date.now() < deadline) {
-    if (existsSync(responseFile)) {
-      try {
-        const data = JSON.parse(readFileSync(responseFile, "utf8"));
-        try { unlinkSync(responseFile); } catch {}
-        return data;
-      } catch {}
-    }
-    await new Promise((r) => setTimeout(r, POLL_MS));
+async function consultSupervisor(payload) {
+  const bridge = await loadBridge();
+  if (!bridge) {
+    // Package unavailable — no transport exists, fail open
+    return { decision: "approve", reason: "PearClaw bridge unavailable — failing open." };
   }
-
-  // Timed out — fail open
-  return { decision: "approve", reason: "Supervisor timed out — failing open." };
+  try {
+    return await bridge.consult(payload);
+  } catch (err) {
+    // Timeout / delivery failure / malformed response — fail open
+    return { decision: "approve", reason: `Supervisor unreachable (${err.message}) — failing open.` };
+  }
 }
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
@@ -234,10 +217,12 @@ process.stdin.on("end", async () => {
     const result = await consultSupervisor(payload);
 
     if (result.decision === "block") {
-      // Exit code 2 = block with message
       const msg = `🚫 Supervisor blocked this action.\nReason: ${result.reason}${
         result.suggestion ? `\nSuggestion: ${result.suggestion}` : ""
       }`;
+      // Claude Code: exit 2 blocks; stderr (not stdout) is fed to the model.
+      // Codex: exit 2 + `{"decision":"block",...}` JSON on stdout blocks.
+      process.stderr.write(msg);
       process.stdout.write(JSON.stringify({ decision: "block", reason: msg }));
       process.exit(2);
       return;
