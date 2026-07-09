@@ -111,7 +111,7 @@ This tells your OpenClaw agent how to handle incoming review requests and write 
 
 For automatic escalation of high-risk actions without relying on the coding agent calling `consult_supervisor` itself. The same script (`hooks/pearclaw-supervisor-hook.js`) installs into either harness — its I/O contract (JSON on stdin, exit code 2 + `{"decision":"block","reason":...}` to block) is compatible across both.
 
-**Claude Code** — copy to `~/.claude/hooks/` and add to `~/.claude/hooks.json`:
+**Claude Code** — copy to `~/.claude/hooks/` and add to the `"hooks"` key of `~/.claude/settings.json` (user scope) or `.claude/settings.json` (project scope). Claude Code reads hooks **only from settings files** — a standalone `~/.claude/hooks.json` is not read and a hook installed there will never fire. Matchers are strings (`"Write|Edit"`), and `timeout` is in **seconds**:
 
 ```bash
 cp node_modules/pearclaw/hooks/pearclaw-supervisor-hook.js ~/.claude/hooks/
@@ -121,11 +121,11 @@ cp node_modules/pearclaw/hooks/pearclaw-supervisor-hook.js ~/.claude/hooks/
 {
   "hooks": {
     "PreToolUse": [{
-      "matcher": { "tool_name": "Write|Edit|MultiEdit|Bash" },
+      "matcher": "Write|Edit|MultiEdit|Bash",
       "hooks": [{
         "type": "command",
         "command": "node ~/.claude/hooks/pearclaw-supervisor-hook.js",
-        "timeout": 28000
+        "timeout": 30
       }]
     }]
   }
@@ -146,14 +146,16 @@ cp node_modules/pearclaw/hooks/pearclaw-supervisor-hook.js ~/.codex/hooks/
       "hooks": [{
         "type": "command",
         "command": "node ~/.codex/hooks/pearclaw-supervisor-hook.js",
-        "timeout": 28
+        "timeout": 30
       }]
     }]
   }
 }
 ```
 
-(Codex hook `timeout` is in seconds, not ms.) Codex will prompt you to trust the hook the first time it fires — see `codex hooks` docs / `/hooks` in the Codex CLI.
+(Both harnesses take hook `timeout` in seconds.) Codex will prompt you to trust the hook the first time it fires — see `codex hooks` docs / `/hooks` in the Codex CLI.
+
+The hook imports the shared transport from the installed `pearclaw` package — it needs `pearclaw` resolvable from the hooks directory (global install, or keep the hook inside the repo checkout).
 
 Note: Codex's own docs describe `PreToolUse` as "a guardrail rather than a complete enforcement boundary" — it doesn't intercept every shell path yet (e.g. `unified_exec`). Treat it as defense in depth, not a hard boundary, on either platform.
 
@@ -167,8 +169,10 @@ All config via environment variables or `~/.pearclaw.json`.
 |----------|---------|-------------|
 | `OPENCLAW_GATEWAY_URL` | `ws://127.0.0.1:18788` | OpenClaw gateway WebSocket URL |
 | `OPENCLAW_GATEWAY_TOKEN` | — | Auth token (if required) |
-| `OPENCLAW_MCP_SESSION` | `main` | Agent session to target |
+| `OPENCLAW_MCP_SESSION` | `main` | Agent session to target (non-`main` values are passed as an explicit wake `sessionKey`) |
+| `OPENCLAW_MCP_TRANSPORT` | `gateway-call` | `gateway-call` (delivers via the gateway `wake` RPC) or `file` (drop-file inbox) |
 | `OPENCLAW_MCP_INBOX_DIR` | `~/.openclaw/mcp-inbox` | Drop-file inbox (fallback) |
+| `OPENCLAW_MCP_WORKSPACE_DIR` | `~/.openclaw/workspace/hedy` | Workspace read by `get_session_context` |
 | `OPENCLAW_MCP_TIMEOUT` | `25000` | Response timeout (ms) |
 | `OPENCLAW_MCP_FAIL_OPEN` | `true` | Approve when supervisor unreachable |
 
@@ -213,7 +217,7 @@ At the start of every session, the coding agent calls `get_session_context` to l
 get_session_context({ project?: "wegodive" })
 ```
 
-This reads three files from `~/.openclaw/workspace/` and returns a compact summary (capped at ~2500 chars):
+This reads three files from the OpenClaw workspace (`OPENCLAW_MCP_WORKSPACE_DIR`, default `~/.openclaw/workspace/hedy`) and returns a compact summary (capped at ~2500 chars):
 
 | File | Lines read | Purpose |
 |------|-----------|--------|
@@ -225,7 +229,7 @@ Context is also written to `~/.pearclaw/session-context.md` for debugging.
 
 **SessionStart hook** (`hooks/pearclaw-session-start.js`) fires automatically before the first message when installed, injecting context without needing an explicit tool call. Same script for both harnesses:
 
-**Claude Code** (`~/.claude/hooks.json`):
+**Claude Code** (`"hooks"` key of `~/.claude/settings.json`):
 ```json
 {
   "hooks": {
@@ -233,7 +237,7 @@ Context is also written to `~/.pearclaw/session-context.md` for debugging.
       "hooks": [{
         "type": "command",
         "command": "node ~/.claude/hooks/pearclaw-session-start.js",
-        "timeout": 8000
+        "timeout": 8
       }]
     }]
   }
@@ -288,7 +292,8 @@ details:  Optional structured data
 ## Limitations
 
 - Response timeout: 25 seconds. If your agent doesn't respond in time, the action is approved (fail-open by default).
-- Requires OpenClaw gateway running locally (or accessible via network).
+- Requests are delivered via the gateway `wake` RPC (immediate wake-text injection); responses come back through a shared temp file. This means the MCP server and the OpenClaw agent must run on the **same host** today — a remote `OPENCLAW_GATEWAY_URL` can deliver requests but the response file would never be seen.
+- Consult decisions are logged to `~/.pearclaw/audit.jsonl` for after-the-fact review.
 - The supervisor can only block/modify — it can't rewrite code directly (yet).
 - Codex's `PreToolUse` hook is best-effort (see install step 5) — it doesn't cover every tool path yet.
 

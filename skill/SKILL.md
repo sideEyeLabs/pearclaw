@@ -82,7 +82,7 @@ These don't need a response — just log them to today's memory.
 
 ## Proactive context injection
 
-You can push context to the next session without waiting for a request. Any changes you make to `BRAIN.md` or `KERNEL.md` in `~/.openclaw/workspace/` are automatically picked up the next time a session starts (via the `get_session_context` MCP tool or the `pearclaw-session-start.js` hook — installed for either Claude Code or Codex CLI).
+You can push context to the next session without waiting for a request. Any changes you make to `BRAIN.md` or `KERNEL.md` in your workspace (`OPENCLAW_MCP_WORKSPACE_DIR`, default `~/.openclaw/workspace/hedy`) are automatically picked up the next time a session starts (via the `get_session_context` MCP tool or the `pearclaw-session-start.js` hook — installed for either Claude Code or Codex CLI).
 
 Use this to:
 - Update `BRAIN.md` with the current sprint focus so the coding agent starts aligned

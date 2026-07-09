@@ -6,7 +6,10 @@
  * injects it so the coding agent doesn't start cold. Same script installs
  * into either harness's hooks directory.
  *
- * Install for Claude Code: copy to ~/.claude/hooks/ and add to ~/.claude/hooks.json:
+ * Install for Claude Code: copy to ~/.claude/hooks/ and add to the "hooks"
+ * key of ~/.claude/settings.json (or .claude/settings.json per project).
+ * Claude Code reads hooks from settings files only — there is no separate
+ * ~/.claude/hooks.json. Timeout is in SECONDS:
  *
  *   {
  *     "hooks": {
@@ -14,7 +17,7 @@
  *         "hooks": [{
  *           "type": "command",
  *           "command": "node ~/.claude/hooks/pearclaw-session-start.js",
- *           "timeout": 8000
+ *           "timeout": 8
  *         }]
  *       }]
  *     }
