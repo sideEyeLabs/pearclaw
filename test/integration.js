@@ -4,7 +4,7 @@
  */
 
 import { spawn } from "child_process";
-import { writeFileSync, existsSync, readFileSync, unlinkSync } from "fs";
+import { writeFileSync, existsSync, readFileSync, unlinkSync, mkdirSync, readdirSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 
@@ -156,9 +156,99 @@ async function testNotify() {
   }
 }
 
+// ─── Helper: start server, send a consult, answer via response file ──────────
+async function runConsultRoundTrip({ responseBody, label, expect }) {
+  const inboxDir = join(tmpdir(), `test-inbox-rt-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  mkdirSync(inboxDir, { recursive: true });
+
+  const server = spawn("node", ["src/server.js"], {
+    stdio: ["pipe", "pipe", "pipe"],
+    env: {
+      ...process.env,
+      OPENCLAW_MCP_FAIL_OPEN: "true",
+      OPENCLAW_MCP_TIMEOUT: "5000",
+      OPENCLAW_MCP_TRANSPORT: "file",
+      OPENCLAW_MCP_INBOX_DIR: inboxDir,
+    },
+  });
+
+  let stdout = "";
+  server.stdout.on("data", (d) => (stdout += d));
+
+  server.stdin.write(
+    JSON.stringify({
+      jsonrpc: "2.0", id: 1, method: "initialize",
+      params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "test", version: "0.0.1" } },
+    }) + "\n"
+  );
+  await new Promise((r) => setTimeout(r, 200));
+  server.stdin.write(
+    JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized", params: {} }) + "\n"
+  );
+
+  server.stdin.write(
+    JSON.stringify({
+      jsonrpc: "2.0", id: 2,
+      method: "tools/call",
+      params: {
+        name: "consult_supervisor",
+        arguments: { action: "Edit src/x.js", context: "Round-trip test", risk_level: "medium" },
+      },
+    }) + "\n"
+  );
+
+  // Wait for the request envelope to land in the inbox, then play supervisor
+  let responseFile = null;
+  const deadline = Date.now() + 3000;
+  while (Date.now() < deadline && !responseFile) {
+    const files = readdirSync(inboxDir).filter((f) => f.startsWith("req-"));
+    if (files.length) {
+      const envelope = JSON.parse(readFileSync(join(inboxDir, files[0]), "utf8"));
+      responseFile = envelope.responseFile;
+    } else {
+      await new Promise((r) => setTimeout(r, 100));
+    }
+  }
+  if (!responseFile) {
+    server.kill();
+    fail(`${label}: request envelope never appeared in inbox dir`);
+    return;
+  }
+  writeFileSync(responseFile, responseBody);
+
+  await new Promise((r) => setTimeout(r, 1500));
+  server.kill();
+
+  if (expect.some((s) => stdout.includes(s))) {
+    pass(label);
+  } else {
+    fail(`${label}: expected one of ${JSON.stringify(expect)}. Got: ${stdout.slice(0, 500)}`);
+  }
+}
+
+// ─── Test: full consult round-trip via file transport ────────────────────────
+async function testConsultRoundTrip() {
+  await runConsultRoundTrip({
+    label: "consult_supervisor round-trip returns supervisor decision",
+    responseBody: JSON.stringify({ decision: "block", reason: "duplicate of lib/x.js", suggestion: "import it" }),
+    expect: ["duplicate of lib/x.js"],
+  });
+}
+
+// ─── Test: malformed supervisor response fails open, not crash ───────────────
+async function testMalformedResponseFailsOpen() {
+  await runConsultRoundTrip({
+    label: "malformed supervisor response fails open with warning",
+    responseBody: JSON.stringify({ decision: "yolo", reason: 42 }),
+    expect: ["Invalid supervisor response", "unreachable"],
+  });
+}
+
 // ─── Run ──────────────────────────────────────────────────────────────────────
 console.log("Running integration tests...\n");
 await testServerStarts();
 await testFailOpen();
 await testNotify();
+await testConsultRoundTrip();
+await testMalformedResponseFailsOpen();
 console.log("\nAll tests passed.");
