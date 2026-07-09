@@ -2,7 +2,10 @@
  * context-injector.js — reads Hedy's live context files and returns a
  * compact string suitable for injection into a Claude Code session.
  *
- * Workspace: ~/.openclaw/workspace/
+ * Workspace: $OPENCLAW_MCP_WORKSPACE_DIR, defaulting to
+ * ~/.openclaw/workspace/hedy (the live Hedy foreground workspace — see
+ * AGENTS.md there for why memory/state lives in the `hedy` subdir, not
+ * the workspace root).
  * Files read:
  *   - KERNEL.md      (first 60 lines)
  *   - BRAIN.md       (first 50 lines)
@@ -15,7 +18,9 @@ import { readFileSync, existsSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
 
-const WORKSPACE = join(homedir(), ".openclaw", "workspace");
+const WORKSPACE =
+  process.env.OPENCLAW_MCP_WORKSPACE_DIR ||
+  join(homedir(), ".openclaw", "workspace", "hedy");
 const MAX_CHARS = 2500;
 
 /**
