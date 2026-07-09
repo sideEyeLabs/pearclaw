@@ -75,9 +75,20 @@ function section(label, content) {
  *
  * @param {string} projectHint  Optional hint from the caller (unused for now,
  *                              reserved for future project-scoped context).
- * @returns {string}            Formatted context string ready for injection.
+ * @param {object} [bridge]     The gateway bridge (see gateway-bridge.js). When
+ *                              its transport is "webhook" (gateway on a
+ *                              different host — see docs/REMOTE_TRANSPORT_PLAN.md),
+ *                              KERNEL.md/BRAIN.md/memory live on the *gateway*
+ *                              host, unreachable via local readFileSync, so
+ *                              this delegates to bridge.getRemoteContext()
+ *                              instead of reading files directly.
+ * @returns {string|Promise<string>}  Formatted context string ready for injection.
  */
-export function getContext(projectHint = "") {
+export function getContext(projectHint = "", bridge = null) {
+  if (bridge?.getRemoteContext) {
+    return bridge.getRemoteContext(projectHint);
+  }
+
   const kernelPath = join(WORKSPACE, "KERNEL.md");
   const brainPath  = join(WORKSPACE, "BRAIN.md");
   const memPath    = join(WORKSPACE, "memory", `${todayDate()}.md`);

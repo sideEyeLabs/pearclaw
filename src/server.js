@@ -181,7 +181,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
   if (name === "get_session_context") {
     try {
-      const context = getContext(args.project || "");
+      const context = await getContext(args.project || "", bridge);
       return {
         content: [{ type: "text", text: context }],
       };

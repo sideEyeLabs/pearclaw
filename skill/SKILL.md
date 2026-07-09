@@ -78,7 +78,7 @@ toward `approve` with a note instead of blocking on a hunch.
 
 ## Handling the response
 
-To write your decision, use the `exec` tool:
+**Same-host (file/gateway-call transport):** write your decision using the `exec` tool:
 
 ```bash
 cat > /tmp/pearclaw-res-<uuid>.json << 'EOF'
@@ -89,6 +89,23 @@ EOF
 Or via the Write tool targeting the exact `responseFile` path from the request.
 
 **Critical:** Write to the exact `responseFile` path from the request. The coding agent is polling that file and will time out in ~25 seconds if it doesn't appear.
+
+**Remote host (webhook transport):** when Claude Code / Codex CLI runs on a different machine
+(see `docs/REMOTE_TRANSPORT_PLAN.md`), the request arrives as an isolated agent turn via
+OpenClaw's `hooks.enabled` HTTP route instead of a wake into your live session, and there is no
+shared filesystem to write a response file to. The message tells you exactly what to run — it
+ends with a ready-made `curl` command targeting a single-use `responseUrl`:
+
+```bash
+curl -sS -X POST 'http://<remote-host>:<port>/response/<uuid>' \
+  -H 'Authorization: Bearer <one-shot-secret>' \
+  -H 'Content-Type: application/json' \
+  -d '{"decision":"approve","reason":"Good to go."}'
+```
+
+Run that exact command via your exec tool, substituting the same JSON body shape used for the
+file-based case (`decision`/`reason`/`suggestion`). The URL and bearer secret are single-use and
+expire quickly — there's no separate registration step, just run the command from the message.
 
 ## Notify events
 
@@ -110,6 +127,11 @@ Use this to:
 - Record a recent architectural decision that the coding agent should know about
 
 No reload or restart needed — context injection is stateless and reads live files each session.
+
+On the webhook transport, `get_session_context` arrives the same way a consult does (an isolated
+agent turn, not a file read) with instructions to read KERNEL.md/BRAIN.md/today's memory yourself
+and curl the formatted text back — same one-shot response URL pattern as above, just with a
+`{"context":"..."}` body instead of a decision.
 
 ## Setup
 

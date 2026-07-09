@@ -17,13 +17,27 @@
  *                    notifies use mode "next-heartbeat" (non-interruptive).
  *   "file"         — drop the request envelope into OPENCLAW_MCP_INBOX_DIR
  *                    for the agent to poll (no gateway needed).
+ *   "webhook"      — for a gateway on a different host (see
+ *                    docs/REMOTE_TRANSPORT_PLAN.md). POSTs to the gateway's
+ *                    real `hooks.enabled` HTTP route (`<hooks.path>/agent`),
+ *                    targeting an isolated agent turn under a configured
+ *                    `agentId` rather than the shared main session. No
+ *                    `openclaw` CLI or shared filesystem needed on this host.
  *
- * Response channel (both transports): the agent writes JSON to the
- * `responseFile` path included in the request; we poll for it. This
- * requires the MCP server/hook and the agent to share a filesystem, so
- * both transports are effectively same-host today. Remote-gateway support
- * would need a network response channel (e.g. the OpenClaw Webhooks
- * plugin) — tracked in docs/CHALLENGES.md, not implemented.
+ * Response channel:
+ *   "gateway-call"/"file" — the agent writes JSON to the `responseFile`
+ *     path included in the request; we poll for it. Requires the MCP
+ *     server/hook and the agent to share a filesystem — same-host only.
+ *   "webhook" — OpenClaw has no built-in mechanism to POST a hook-triggered
+ *     agent turn's result to an arbitrary external URL (that only exists
+ *     for cron jobs via `--webhook`, a different subsystem — confirmed
+ *     against the installed OpenClaw docs, see the async job's decisions
+ *     log for the investigation). So the responding agent turn is instructed to
+ *     `curl` its decision back to a `responseUrl` embedded in the request,
+ *     authenticated with a one-shot per-request bearer secret, received by
+ *     response-server.js's local HTTP listener. Works cross-host over
+ *     Tailscale when `PEARCLAW_RESPONSE_URL` points at this host's
+ *     Tailscale address.
  *
  * Every consult round-trip is appended to ~/.pearclaw/audit.jsonl
  * (request + decision), since response files are deleted after reading.
@@ -41,6 +55,7 @@ import {
 import { tmpdir, homedir } from "os";
 import { join } from "path";
 import { randomUUID } from "crypto";
+import { registerPendingResponse } from "./response-server.js";
 
 const POLL_INTERVAL_MS = 250;
 const VALID_DECISIONS = ["approve", "block", "modify"];
@@ -54,6 +69,12 @@ export function createGatewayBridge(config) {
     consult: (payload) => sendAndWait("consult", payload, config),
     notify: (payload) => sendAndWait("notify", payload, config),
     poll: (_payload) => readPushInbox(),
+    // Only meaningful for the webhook transport — gateway-call/file transports
+    // read context.js's local files directly (same-host by construction).
+    getRemoteContext:
+      config.transport === "webhook"
+        ? (projectHint) => sendAndWaitWebhook("context", { projectHint }, config)
+        : null,
   };
 }
 
@@ -75,6 +96,10 @@ function readPushInbox() {
 }
 
 async function sendAndWait(type, payload, config) {
+  if (config.transport === "webhook") {
+    return sendAndWaitWebhook(type, payload, config);
+  }
+
   const requestId = randomUUID();
   const responseFile = join(tmpdir(), `pearclaw-res-${requestId}.json`);
 
@@ -103,6 +128,77 @@ async function sendAndWait(type, payload, config) {
   const result = await pollForResponse(responseFile, config.timeoutMs || 25000);
   audit({ ...envelope, decision: result });
   return result;
+}
+
+// ─── Transport: webhook (cross-host, see file header) ────────────────────────
+async function sendAndWaitWebhook(type, payload, config) {
+  if (!config.webhookUrl) {
+    throw new Error(
+      "webhook transport selected but PEARCLAW_WEBHOOK_URL is not set."
+    );
+  }
+
+  const timeoutMs = config.timeoutMs || 25000;
+  const requestId = randomUUID();
+
+  // notify is fire-and-forget: no response channel needed.
+  if (type === "notify") {
+    const envelope = { requestId, type, payload, ts: Date.now() };
+    await postToHooksAgent(formatAgentMessage(envelope), config, timeoutMs);
+    audit({ ...envelope, decision: null });
+    return { ok: true };
+  }
+
+  const { secret, responseUrl, awaitResponse } = await registerPendingResponse({
+    bindHost: config.responseBindHost,
+    publicBase: config.responsePublicUrl,
+    timeoutMs,
+  });
+
+  const envelope = { requestId, type, payload, responseUrl, responseSecret: secret, ts: Date.now() };
+
+  await postToHooksAgent(formatAgentMessage(envelope), config, timeoutMs);
+
+  const raw = await awaitResponse;
+  const result = type === "context" ? validateContextResponse(raw) : validateResponse(raw);
+  audit({ ...envelope, responseSecret: undefined, decision: type === "context" ? null : result });
+  return result;
+}
+
+// Context responses are a plain string blob, not a decision — same schema
+// discipline (untrusted input, require the one field we actually use).
+function validateContextResponse(data) {
+  if (!data || typeof data !== "object" || typeof data.context !== "string") {
+    throw new Error("context response must be a JSON object with a string `context` field");
+  }
+  return data.context;
+}
+
+function postToHooksAgent(message, config, timeoutMs) {
+  const body = JSON.stringify({
+    message,
+    ...(config.agentId ? { agentId: config.agentId } : {}),
+    deliver: false,
+    timeoutSeconds: Math.max(1, Math.ceil(timeoutMs / 1000)),
+  });
+
+  return httpPostJson(config.webhookUrl, body, config.webhookToken);
+}
+
+async function httpPostJson(url, body, bearerToken) {
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      ...(bearerToken ? { authorization: `Bearer ${bearerToken}` } : {}),
+    },
+    body,
+  });
+  const text = await res.text();
+  if (!res.ok) {
+    throw new Error(`Webhook delivery failed: HTTP ${res.status} ${text}`);
+  }
+  return text;
 }
 
 // ─── Transport: openclaw gateway call wake ───────────────────────────────────
@@ -220,6 +316,24 @@ function audit(entry) {
 function formatAgentMessage(envelope) {
   const { type, payload } = envelope;
 
+  if (type === "context") {
+    return (
+      `A coding agent session is starting${payload.projectHint ? ` (project hint: ${payload.projectHint})` : ""} ` +
+      `and needs your session-start context. Read the first 60 lines of KERNEL.md, the first 50 ` +
+      `lines of BRAIN.md, and the last 30 lines of today's memory file from your workspace, format ` +
+      `them the same way \`get_session_context\` does locally (labelled sections, ~2500 char cap, ` +
+      `skip missing files), then run this exact shell command with that text as the JSON \`context\` value:\n\n` +
+      "```bash\n" +
+      `curl -sS -X POST '${envelope.responseUrl}' \\\n` +
+      `  -H 'Authorization: Bearer ${envelope.responseSecret}' \\\n` +
+      `  -H 'Content-Type: application/json' \\\n` +
+      `  -d '{"context":"..."}'\n` +
+      "```\n" +
+      `(single-use URL, expires shortly — if no context files exist, curl back ` +
+      `{"context":"(no context files found)"} rather than leaving the caller to time out.)`
+    );
+  }
+
   if (type === "notify") {
     return (
       `🤖 Coding agent update [${payload.event}]: ${payload.summary}` +
@@ -236,11 +350,23 @@ function formatAgentMessage(envelope) {
       ? `\nFiles: ${payload.files_affected.join(", ")}`
       : "";
 
+  const responseInstruction = envelope.responseUrl
+    ? `Respond by running exactly this shell command (via your exec/Bash tool):\n` +
+      "```bash\n" +
+      `curl -sS -X POST '${envelope.responseUrl}' \\\n` +
+      `  -H 'Authorization: Bearer ${envelope.responseSecret}' \\\n` +
+      `  -H 'Content-Type: application/json' \\\n` +
+      `  -d '{"decision":"approve","reason":"..."}'\n` +
+      "```\n" +
+      `(use \`"decision":"block"\` or \`"decision":"modify"\` with a \`"suggestion"\` field as needed — ` +
+      `see skill/SKILL.md for the full decision guide. This URL is single-use and expires shortly.)`
+    : `Respond with JSON to \`${envelope.responseFile}\`:\n` +
+      `\`{"decision":"approve","reason":"..."}\` or \`{"decision":"block","reason":"...","suggestion":"..."}\``;
+
   return (
     `${riskEmoji} **Coding agent review request** (${payload.risk_level} risk)\n\n` +
     `**Action:** ${payload.action}${filesLine}\n` +
     `**Context:** ${payload.context}\n\n` +
-    `Respond with JSON to \`${envelope.responseFile}\`:\n` +
-    `\`{"decision":"approve","reason":"..."}\` or \`{"decision":"block","reason":"...","suggestion":"..."}\``
+    responseInstruction
   );
 }
