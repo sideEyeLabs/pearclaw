@@ -35,7 +35,7 @@ Write a JSON file to the `responseFile` path in the request:
 ```json
 {
   "decision": "block",
-  "reason": "Don't add Stripe logic here — we already have this in lib/stripe.js.",
+  "reason": "This duplicates lib/stripe.js — the coding agent likely didn't see it because it's outside its working directory. lib/stripe.js already wraps webhook signature verification and idempotency handling; writing a second handler here means two divergent Stripe integrations to maintain.",
   "suggestion": "Edit lib/stripe.js instead and import from there."
 }
 ```
@@ -43,7 +43,7 @@ Write a JSON file to the `responseFile` path in the request:
 ```json
 {
   "decision": "modify",
-  "reason": "Approved with changes.",
+  "reason": "Direction is right, but the handler is missing an idempotency key check — Stripe retries webhook delivery on timeout, and without this the subscription-created event could be processed twice. This isn't visible from the diff alone; it's a constraint from Stripe's delivery guarantees, not a style preference.",
   "suggestion": "Add idempotency key check at the top of the handler."
 }
 ```
@@ -55,6 +55,26 @@ Write a JSON file to the `responseFile` path in the request:
 | `approve` | Action looks correct and consistent with project patterns |
 | `block` | Action is wrong, duplicates existing code, violates conventions, or is risky |
 | `modify` | Action is right direction but needs a specific change before proceeding |
+
+## Every block/modify must teach, not just verdict
+
+Claude Code and Codex CLI run on a different machine than this one — they have no access to
+this workspace's memory, docs, or file tree, and no way to ask a follow-up question before
+their 25s timeout. A bare "no, do X instead" gives them a correction with no way to generalize
+it. The `reason` field is the only channel available to fix the coding agent's actual
+understanding, so for every `block` or `modify` it must answer two things, not one:
+
+1. **What's wrong with the current path** — the specific mistaken assumption, missing
+   context, or overlooked constraint that led to this action. Not "this is wrong" but *why*
+   it's wrong (existing code it didn't know about, a constraint from an external system, a
+   decision already made elsewhere, a pattern it deviated from).
+2. **What it should understand differently going forward** — the fact or rule that, if the
+   coding agent had known it, would have produced the right action without being told.
+
+A `reason` that only restates the verdict ("don't do that," "wrong approach," "needs changes")
+is not acceptable — if you can't name the specific gap in the coding agent's understanding,
+you don't have enough information to block/modify yet; ask a clarifying follow-up or default
+toward `approve` with a note instead of blocking on a hunch.
 
 ## Handling the response
 
