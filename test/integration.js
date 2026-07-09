@@ -391,6 +391,144 @@ async function testWebhookContext() {
   }
 }
 
+// ─── Test: webhook transport times out and fails open if no curl-back arrives ─
+async function testWebhookTimeout() {
+  // Gateway accepts the request but never posts a decision back — simulates a
+  // dropped/slow agent turn on the responder side.
+  const fakeGateway = createServer((req, res) => {
+    req.on("data", () => {});
+    req.on("end", () => res.writeHead(200, { "content-type": "application/json" }).end('{"ok":true}'));
+  });
+  await new Promise((r) => fakeGateway.listen(0, "127.0.0.1", r));
+  const gatewayPort = fakeGateway.address().port;
+
+  const server = spawn("node", ["src/server.js"], {
+    stdio: ["pipe", "pipe", "pipe"],
+    env: {
+      ...process.env,
+      OPENCLAW_MCP_TRANSPORT: "webhook",
+      PEARCLAW_WEBHOOK_URL: `http://127.0.0.1:${gatewayPort}/hooks/agent`,
+      PEARCLAW_WEBHOOK_TOKEN: "test-hook-token",
+      PEARCLAW_AGENT_ID: "hedy",
+      OPENCLAW_MCP_TIMEOUT: "1000",
+      OPENCLAW_MCP_FAIL_OPEN: "true",
+    },
+  });
+
+  let stdout = "";
+  server.stdout.on("data", (d) => (stdout += d));
+
+  server.stdin.write(
+    JSON.stringify({
+      jsonrpc: "2.0", id: 1, method: "initialize",
+      params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "test", version: "0.0.1" } },
+    }) + "\n"
+  );
+  await new Promise((r) => setTimeout(r, 200));
+  server.stdin.write(
+    JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized", params: {} }) + "\n"
+  );
+  server.stdin.write(
+    JSON.stringify({
+      jsonrpc: "2.0", id: 2,
+      method: "tools/call",
+      params: {
+        name: "consult_supervisor",
+        arguments: { action: "Write test.js", context: "webhook timeout test", risk_level: "low" },
+      },
+    }) + "\n"
+  );
+
+  await new Promise((r) => setTimeout(r, 2500));
+  server.kill();
+  fakeGateway.close();
+
+  if (stdout.includes("approve") || stdout.includes("unreachable") || stdout.includes("timed out")) {
+    pass("webhook transport: fails open when no curl-back response arrives");
+  } else {
+    fail(`webhook timeout: expected fail-open response. Got: ${stdout.slice(0, 400)}`);
+  }
+}
+
+// ─── Test: webhook response server rejects a wrong bearer secret ─────────────
+async function testWebhookAuthMismatch() {
+  // The "agent turn" curls back with the wrong secret — response-server.js
+  // must 401 it and leave the request pending (not silently accept), so the
+  // real decision (if any) can still arrive, and a stuck request times out
+  // and fails open rather than being satisfied by an unauthenticated poster.
+  let sawUnauthorized = false;
+  const fakeGateway = createServer((req, res) => {
+    let body = "";
+    req.on("data", (c) => (body += c));
+    req.on("end", async () => {
+      const { message } = JSON.parse(body);
+      const match = message.match(/curl -sS -X POST '([^']+)'/s);
+      res.writeHead(200, { "content-type": "application/json" }).end('{"ok":true}');
+      if (!match) return;
+      const [, responseUrl] = match;
+      const attempt = await fetch(responseUrl, {
+        method: "POST",
+        headers: { authorization: "Bearer wrong-secret", "content-type": "application/json" },
+        body: JSON.stringify({ decision: "approve", reason: "should be rejected" }),
+      });
+      sawUnauthorized = attempt.status === 401;
+    });
+  });
+  await new Promise((r) => fakeGateway.listen(0, "127.0.0.1", r));
+  const gatewayPort = fakeGateway.address().port;
+
+  const server = spawn("node", ["src/server.js"], {
+    stdio: ["pipe", "pipe", "pipe"],
+    env: {
+      ...process.env,
+      OPENCLAW_MCP_TRANSPORT: "webhook",
+      PEARCLAW_WEBHOOK_URL: `http://127.0.0.1:${gatewayPort}/hooks/agent`,
+      PEARCLAW_WEBHOOK_TOKEN: "test-hook-token",
+      PEARCLAW_AGENT_ID: "hedy",
+      OPENCLAW_MCP_TIMEOUT: "1000",
+      OPENCLAW_MCP_FAIL_OPEN: "true",
+    },
+  });
+
+  let stdout = "";
+  server.stdout.on("data", (d) => (stdout += d));
+
+  server.stdin.write(
+    JSON.stringify({
+      jsonrpc: "2.0", id: 1, method: "initialize",
+      params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "test", version: "0.0.1" } },
+    }) + "\n"
+  );
+  await new Promise((r) => setTimeout(r, 200));
+  server.stdin.write(
+    JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized", params: {} }) + "\n"
+  );
+  server.stdin.write(
+    JSON.stringify({
+      jsonrpc: "2.0", id: 2,
+      method: "tools/call",
+      params: {
+        name: "consult_supervisor",
+        arguments: { action: "Write test.js", context: "webhook auth mismatch test", risk_level: "low" },
+      },
+    }) + "\n"
+  );
+
+  await new Promise((r) => setTimeout(r, 2500));
+  server.kill();
+  fakeGateway.close();
+
+  if (!sawUnauthorized) {
+    fail("webhook auth mismatch: response-server did not 401 a wrong bearer secret");
+    return;
+  }
+  if (stdout.includes("approve") || stdout.includes("unreachable") || stdout.includes("timed out")) {
+    pass("webhook transport: rejects wrong bearer secret on curl-back and fails open");
+  } else {
+    fail(`webhook auth mismatch: expected fail-open response. Got: ${stdout.slice(0, 400)}`);
+  }
+}
+
 // ─── Run ──────────────────────────────────────────────────────────────────────
 console.log("Running integration tests...\n");
 await testServerStarts();
@@ -400,4 +538,6 @@ await testConsultRoundTrip();
 await testMalformedResponseFailsOpen();
 await testWebhookRoundTrip();
 await testWebhookContext();
+await testWebhookTimeout();
+await testWebhookAuthMismatch();
 console.log("\nAll tests passed.");

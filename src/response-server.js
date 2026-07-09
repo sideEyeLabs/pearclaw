@@ -15,11 +15,20 @@
  */
 
 import { createServer } from "http";
-import { randomUUID } from "crypto";
+import { randomUUID, timingSafeEqual } from "crypto";
 
 let server = null;
 let listenReady = null;
 const pending = new Map(); // requestId -> { secret, resolve, reject, timer }
+
+// Bearer-token check on an untrusted request must not leak timing info about
+// how many secret bytes matched.
+function constantTimeEqual(a, b) {
+  const bufA = Buffer.from(a);
+  const bufB = Buffer.from(b);
+  if (bufA.length !== bufB.length) return false;
+  return timingSafeEqual(bufA, bufB);
+}
 
 function ensureServer(host) {
   if (server) return listenReady;
@@ -45,7 +54,7 @@ function ensureServer(host) {
 
     const auth = req.headers["authorization"] || "";
     const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
-    if (token !== entry.secret) {
+    if (!constantTimeEqual(token, entry.secret)) {
       res.writeHead(401).end();
       return;
     }
@@ -109,7 +118,12 @@ export async function registerPendingResponse({ bindHost = "127.0.0.1", publicBa
   return { requestId, secret, responseUrl, awaitResponse };
 }
 
-/** Test/shutdown helper — closes the listener if idle. */
+/**
+ * Closes the listener if idle. Not called anywhere today — the MCP server
+ * process exits on its own lifecycle and this listener dies with it.
+ * Exported for a future graceful-shutdown path or for tests that want to
+ * force-close between runs.
+ */
 export function closeResponseServer() {
   if (server && pending.size === 0) {
     server.close();
