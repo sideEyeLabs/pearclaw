@@ -1,11 +1,15 @@
 #!/usr/bin/env node
 /**
- * openclaw-supervisor PreToolUse hook
+ * pearclaw-supervisor PreToolUse hook
  *
- * Fires before Write/Edit/Bash tool calls and consults your OpenClaw agent
- * for any high-risk action. Lower-risk actions pass through.
+ * Fires before Write/Edit/Bash (Claude Code) or apply_patch/Bash (Codex CLI)
+ * tool calls and consults your OpenClaw agent for any high-risk action.
+ * Lower-risk actions pass through. Same script installs into either harness —
+ * the hook I/O contract for PreToolUse is compatible enough (JSON on stdin,
+ * exit code 2 + `{"decision":"block","reason":...}` to block) that no fork
+ * is needed.
  *
- * Install: copy to ~/.claude/hooks/ and add to ~/.claude/hooks.json:
+ * Install for Claude Code: copy to ~/.claude/hooks/ and add to ~/.claude/hooks.json:
  *
  *   {
  *     "hooks": {
@@ -13,12 +17,32 @@
  *         "matcher": { "tool_name": "Write|Edit|MultiEdit|Bash" },
  *         "hooks": [{
  *           "type": "command",
- *           "command": "node ~/.claude/hooks/openclaw-supervisor-hook.js",
+ *           "command": "node ~/.claude/hooks/pearclaw-supervisor-hook.js",
  *           "timeout": 28000
  *         }]
  *       }]
  *     }
  *   }
+ *
+ * Install for Codex CLI: copy to ~/.codex/hooks/ and add to ~/.codex/hooks.json:
+ *
+ *   {
+ *     "hooks": {
+ *       "PreToolUse": [{
+ *         "matcher": "Bash|apply_patch",
+ *         "hooks": [{
+ *           "type": "command",
+ *           "command": "node ~/.codex/hooks/pearclaw-supervisor-hook.js",
+ *           "timeout": 28
+ *         }]
+ *       }]
+ *     }
+ *   }
+ *
+ * Note: Codex's docs describe PreToolUse as "a guardrail rather than a
+ * complete enforcement boundary" — it doesn't yet intercept every shell path
+ * (e.g. unified_exec) the way Claude Code's hook does. Treat it as
+ * best-effort on Codex, not a hard boundary.
  *
  * The hook uses the MCP server's temp-file protocol directly (no separate process needed).
  */
@@ -63,6 +87,16 @@ function assessRisk(toolName, toolInput) {
     return "low";
   }
 
+  if (toolName === "apply_patch") {
+    // Codex represents file writes/edits as a unified-diff-style patch in
+    // tool_input.command — file paths appear in the patch headers, so the
+    // same pattern scan catches both command injection and sensitive paths.
+    const patch = toolInput?.command || "";
+    if (HIGH_RISK_PATTERNS.some((p) => p.test(patch))) return "high";
+    if (HIGH_RISK_PATHS.some((p) => p.test(patch))) return "high";
+    return "low";
+  }
+
   if (toolName === "Write" || toolName === "Edit" || toolName === "MultiEdit") {
     const path = toolInput?.file_path || toolInput?.path || "";
     if (HIGH_RISK_PATHS.some((p) => p.test(path))) return "high";
@@ -76,8 +110,20 @@ function buildPayload(toolName, toolInput, riskLevel) {
   if (toolName === "Bash") {
     return {
       action: `Run: \`${(toolInput?.command || "").slice(0, 300)}\``,
-      context: toolInput?.description || "Shell command from Claude Code",
+      context: toolInput?.description || "Shell command from coding agent",
       files_affected: [],
+      risk_level: riskLevel,
+    };
+  }
+
+  if (toolName === "apply_patch") {
+    const patch = toolInput?.command || "";
+    const fileMatch = patch.match(/\*\*\* (Update|Add|Delete) File: (.+)/);
+    const path = fileMatch ? fileMatch[2].trim() : "unknown";
+    return {
+      action: `apply_patch (${fileMatch ? fileMatch[1].toLowerCase() : "modify"}): ${path}`,
+      context: "File operation from coding agent",
+      files_affected: path !== "unknown" ? [path] : [],
       risk_level: riskLevel,
     };
   }
@@ -86,7 +132,7 @@ function buildPayload(toolName, toolInput, riskLevel) {
   const isNew = !existsSync(path);
   return {
     action: `${toolName} ${isNew ? "(new)" : "(modify)"}: ${path}`,
-    context: `Claude Code file operation`,
+    context: `File operation from coding agent`,
     files_affected: [path],
     risk_level: riskLevel,
   };
@@ -170,8 +216,8 @@ process.stdin.on("end", async () => {
     const toolName = data.tool_name;
     const toolInput = data.tool_input;
 
-    // Only intercept write/exec tools
-    if (!["Write", "Edit", "MultiEdit", "Bash"].includes(toolName)) {
+    // Only intercept write/exec tools (Write/Edit/MultiEdit: Claude Code, apply_patch: Codex)
+    if (!["Write", "Edit", "MultiEdit", "Bash", "apply_patch"].includes(toolName)) {
       process.exit(0);
       return;
     }
@@ -198,10 +244,14 @@ process.stdin.on("end", async () => {
     }
 
     if (result.decision === "modify" && result.suggestion) {
-      // Exit 0 with additionalContext — Claude Code will see the guidance
+      // Exit 0 with additionalContext. Emit both the flat shape (Claude Code)
+      // and the hookSpecificOutput-nested shape (Codex) so one payload works
+      // on either harness — each ignores the key it doesn't recognize.
+      const guidance = `🟡 Supervisor guidance: ${result.suggestion}`;
       process.stdout.write(
         JSON.stringify({
-          additionalContext: `🟡 Supervisor guidance: ${result.suggestion}`,
+          additionalContext: guidance,
+          hookSpecificOutput: { hookEventName: "PreToolUse", additionalContext: guidance },
         })
       );
     }

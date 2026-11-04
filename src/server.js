@@ -1,14 +1,15 @@
 #!/usr/bin/env node
 /**
- * pearclaw — MCP server that bridges Claude Code to your OpenClaw agent.
+ * pearclaw — MCP server that bridges Claude Code or Codex CLI to your OpenClaw agent.
  *
- * Your OpenClaw agent gets real-time visibility into every Claude Code action,
+ * Your OpenClaw agent gets real-time visibility into every coding-agent action,
  * can inject guidance mid-session, and can block tool calls before they run.
  *
  * Usage:
  *   npx pearclaw
  *
- * Or add to ~/.claude/settings.json mcpServers block (see README).
+ * Or add to ~/.claude/settings.json (Claude Code) or ~/.codex/config.toml
+ * (Codex CLI) mcpServers/mcp_servers block (see README).
  */
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -19,6 +20,7 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import { createGatewayBridge } from "./gateway-bridge.js";
 import { loadConfig } from "./config.js";
+import { getContext } from "./context-injector.js";
 
 const config = loadConfig();
 const bridge = createGatewayBridge(config);
@@ -29,7 +31,8 @@ const server = new Server(
 );
 
 // ─── Tool: consult_supervisor ────────────────────────────────────────────────
-// Called by Claude Code before significant actions. Returns approve/block/modify.
+// Called by the coding agent (Claude Code or Codex CLI) before significant
+// actions. Returns approve/block/modify.
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: [
     {
@@ -78,6 +81,23 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           context: {
             type: "string",
             description: "Brief description of what you just did / are about to do.",
+          },
+        },
+        required: [],
+      },
+    },
+    {
+      name: "get_session_context",
+      description:
+        "Get Hedy context for this coding session. Call this at the start of every session. " +
+        "Returns project state, active priorities, and recent decisions so you can work in " +
+        "context without starting cold.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          project: {
+            type: "string",
+            description: "Optional project name hint (e.g. 'wegodive', 'clipcurate').",
           },
         },
         required: [],
@@ -155,6 +175,24 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     } catch (err) {
       return {
         content: [{ type: "text", text: '{"message": null}' }],
+      };
+    }
+  }
+
+  if (name === "get_session_context") {
+    try {
+      const context = getContext(args.project || "");
+      return {
+        content: [{ type: "text", text: context }],
+      };
+    } catch (err) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: "(PearClaw: could not load Hedy context — workspace may be unavailable. Proceeding without context.)",
+          },
+        ],
       };
     }
   }

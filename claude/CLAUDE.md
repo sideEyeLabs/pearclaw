@@ -35,3 +35,21 @@ If you encounter an unrecoverable error, call `notify_supervisor` with `event: "
 ## Efficiency
 
 Don't consult for every file read or minor operation — that creates noise. Batch related actions into a single consult when possible: "I'm going to create X, Y, Z files and run migration A."
+
+---
+
+## Session Start Protocol
+
+At the start of every new session, call `get_session_context` before doing anything else:
+
+```
+get_session_context({})
+```
+
+This returns Hedy's live operational state — current priorities, recent decisions, active projects, and constraints. It prevents you from working against stale assumptions or repeating decisions that were already made.
+
+**If `get_session_context` returns context:** Acknowledge it briefly (one sentence) before starting work. For example: "Got context — WeGoDive is the active priority, DiveOps on hold."
+
+**If it returns an error or empty:** Proceed normally. Missing context is non-fatal.
+
+The `SessionStart` hook (`pearclaw-session-start.js`) also fires automatically when installed — it injects context before your first message. The explicit `get_session_context` call is a belt-and-suspenders fallback for when the hook isn't active.
